@@ -221,6 +221,38 @@ class Minesweeper:
         )
         self.hint_btn.pack(side="right", pady=8, padx=(0, 4))
 
+        # ✔ 안전 셀 자동 열기 버튼 (힌트 모드에서만 표시)
+        self.auto_safe_btn = tk.Button(
+            panel, text="✔️안전",
+            font=("맑은 고딕", 13, "bold"),
+            bg="#C8F0C8", activebackground="#A0E0A0",
+            relief="raised", bd=2,
+            command=self._auto_open_safe,
+            cursor="hand2",
+            padx=6, pady=4
+        )
+        # 🚩 지뢰 자동 깃발 버튼 (힌트 모드에서만 표시)
+        self.auto_flag_btn = tk.Button(
+            panel, text="🚩지뢰",
+            font=("맑은 고딕", 13, "bold"),
+            bg="#F0C8C8", activebackground="#E0A0A0",
+            relief="raised", bd=2,
+            command=self._auto_flag_mines,
+            cursor="hand2",
+            padx=6, pady=4
+        )
+        # 🎲 자동 플레이 버튼 (안전→깃발→반복→교착시 ⭐클릭)
+        self.auto_play_btn = tk.Button(
+            panel, text="🎲자동",
+            font=("맑은 고딕", 13, "bold"),
+            bg="#C8D8F0", activebackground="#A0B8E0",
+            relief="raised", bd=2,
+            command=self._auto_play,
+            cursor="hand2",
+            padx=6, pady=4
+        )
+        # 초기에는 숨김 (힌트 on 시 표시)
+
         # ── 보드 캔버스 ──
         self.canvas = tk.Canvas(
             outer,
@@ -749,6 +781,13 @@ class Minesweeper:
         self._stop_timer()
         self.face_btn.config(text="😎")
 
+        # 힌트 오버레이 즉시 제거
+        self.canvas.delete("hint")
+        self._hint_mode = False
+        self.hint_btn.config(relief="raised", bg=BG_GRAY)
+        self.auto_safe_btn.pack_forget()
+        self.auto_flag_btn.pack_forget()
+
         # 미표시 지뢰에 깃발 자동 설치
         for r in range(self.rows):
             for c in range(self.cols):
@@ -780,6 +819,13 @@ class Minesweeper:
         self.game_over = True
         self._stop_timer()
         self.face_btn.config(text="😵")
+
+        # 힌트 오버레이 즉시 제거
+        self.canvas.delete("hint")
+        self._hint_mode = False
+        self.hint_btn.config(relief="raised", bg=BG_GRAY)
+        self.auto_safe_btn.pack_forget()
+        self.auto_flag_btn.pack_forget()
 
         for r in range(self.rows):
             for c in range(self.cols):
@@ -825,10 +871,87 @@ class Minesweeper:
         self._hint_mode = not self._hint_mode
         if self._hint_mode:
             self.hint_btn.config(relief="sunken", bg="#E0E0B0")
+            self.auto_safe_btn.pack(side="right", pady=8, padx=(0, 2))
+            self.auto_flag_btn.pack(side="right", pady=8, padx=(0, 2))
+            self.auto_play_btn.pack(side="right", pady=8, padx=(0, 2))
             self._show_hints()
         else:
             self.hint_btn.config(relief="raised", bg=BG_GRAY)
+            self.auto_safe_btn.pack_forget()
+            self.auto_flag_btn.pack_forget()
+            self.auto_play_btn.pack_forget()
             self.canvas.delete("hint")
+
+    def _auto_open_safe(self):
+        """✔ 0% 확률 셀을 반복적으로 모두 자동 열기 (+ 100% 깃발도 동시)"""
+        if self.game_over or self.game_won or self.first_click:
+            return
+        self._auto_solve_loop()
+        self._update_hints_if_active()
+
+    def _auto_flag_mines(self):
+        """🚩 100% 확률 셀을 반복적으로 모두 자동 깃발 (+ 0% 열기도 동시)"""
+        if self.game_over or self.game_won or self.first_click:
+            return
+        self._auto_solve_loop()
+        self._update_hints_if_active()
+
+    def _auto_solve_loop(self):
+        """0%→열기, 100%→깃발을 더 이상 진전 없을 때까지 반복"""
+        for _ in range(200):  # 무한루프 방지
+            if self.game_over or self.game_won:
+                return
+            probs = self._calc_probabilities()
+            progress = False
+
+            # 100% 깃발
+            for (r, c), p in probs.items():
+                if round(p * 100) == 100 and self.cell_state[r][c] == STATE_CLOSED:
+                    self.cell_state[r][c] = STATE_FLAG
+                    self.flags_count += 1
+                    self._draw_cell(r, c)
+                    progress = True
+            if progress:
+                self.mine_lbl.config(text=self._lcd(self.mine_count - self.flags_count))
+
+            # 0% 열기
+            for (r, c), p in probs.items():
+                if round(p * 100) == 0 and self.cell_state[r][c] == STATE_CLOSED:
+                    self._open_cell(r, c)
+                    progress = True
+                    if self.game_over:
+                        return
+
+            if progress:
+                self._check_win()
+            else:
+                break  # 더 이상 진전 없음
+
+    def _auto_play(self):
+        """🎲 전자동: 안전→깃발→반복→교착 시 ⭐클릭까지 자동 수행"""
+        if self.game_over or self.game_won or self.first_click:
+            return
+        for _ in range(500):  # 무한루프 방지
+            if self.game_over or self.game_won:
+                break
+            # 먼저 확정적 수를 모두 둠
+            self._auto_solve_loop()
+            if self.game_over or self.game_won:
+                break
+
+            # 교착 상태: 최저 확률 셀 자동 클릭 (⭐)
+            probs = self._calc_probabilities()
+            closed = {(r,c): p for (r,c), p in probs.items()
+                      if self.cell_state[r][c] == STATE_CLOSED}
+            if not closed:
+                break
+            best = min(closed, key=lambda k: closed[k])
+            r, c = best
+            self._open_cell(r, c)
+            if self.game_over:
+                break
+            self._check_win()
+        self._update_hints_if_active()
 
     def _calc_probabilities(self) -> dict:
         """
@@ -844,8 +967,8 @@ class Minesweeper:
         """
         from math import comb
 
-        MAX_GROUP_SIZE = 28      # 이 이상인 그룹 → 로컬 추정 폴백
-        MAX_BT_NODES   = 300_000 # 백트래킹 노드 한도 (속도 보호)
+        MAX_GROUP_SIZE = 100      # 이 이상인 그룹 → MC 샘플링 폴백
+        MAX_BT_NODES   = 2_000_000 # 백트래킹 노드 한도 (속도 보호)
 
         def safe_comb(n, k):
             return comb(n, k) if 0 <= k <= n else 0
@@ -881,43 +1004,132 @@ class Minesweeper:
                     for r in range(self.rows) for c in range(self.cols)
                     if self.cell_state[r][c] == STATE_CLOSED}
 
-        # ── 2. 제약 전파 (Propagation) ────────────────────
-        # 확정 안전(defi_safe)·확정 지뢰(defi_mine) 셀을 반복 제거
+        # ── 2. 제약 전파 + Gaussian Elimination ────────────
         defi_safe = set()
         defi_mine = set()
         changed = True
         while changed:
             changed = False
+
+            # (a) 기본 전파: rem=0 → safe, rem=len → mine
             new_cst = []
             for rem, cl in cst_set:
-                # 이미 확정된 셀 제거해 제약 갱신
                 cl2  = frozenset(c for c in cl if c not in defi_safe and c not in defi_mine)
                 rem2 = rem - sum(1 for c in cl if c in defi_mine)
                 if rem2 < 0 or rem2 > len(cl2):
-                    continue   # 모순 (이론상 정상 게임에선 불가)
+                    continue
                 if rem2 == 0 and cl2:
                     defi_safe.update(cl2);  changed = True
                 elif cl2 and rem2 == len(cl2):
                     defi_mine.update(cl2);  changed = True
                 elif cl2:
                     new_cst.append((rem2, cl2))
-            # 부분집합 제약 추론: A⊂B → (B-A) 에 (B.rem - A.rem) 개의 지뢰
-            extra = []
-            for i, (ri, ci_) in enumerate(new_cst):
-                for j, (rj, cj_) in enumerate(new_cst):
-                    if i == j:
-                        continue
-                    if ci_ < cj_:           # ci_ ⊂ cj_
-                        diff = cj_ - ci_
-                        dr   = rj - ri
-                        if dr >= 0 and (dr, diff) not in [(r2, cl2) for r2, cl2 in new_cst + extra]:
-                            extra.append((dr, diff))
-            for rem2, cl2 in extra:
-                if rem2 == 0 and cl2:
-                    defi_safe.update(cl2);  changed = True
-                elif cl2 and rem2 == len(cl2):
-                    defi_mine.update(cl2);  changed = True
             cst_set = new_cst
+
+            # (b) Gaussian elimination: 정수 행렬 행 축소
+            if not cst_set:
+                break
+
+            # 변수(셀) 인덱싱
+            all_cells_g = set()
+            for _, cl in cst_set:
+                all_cells_g.update(cl)
+            cell_list = sorted(all_cells_g)
+            cell_idx  = {c: i for i, c in enumerate(cell_list)}
+            n_vars    = len(cell_list)
+            n_rows    = len(cst_set)
+
+            # 행렬 구축: [계수들 | 나머지값]
+            matrix = []
+            for rem, cl in cst_set:
+                row = [0] * (n_vars + 1)
+                for c in cl:
+                    row[cell_idx[c]] = 1
+                row[n_vars] = rem
+                matrix.append(row)
+
+            # 정수 가우스 소거 (피벗 열 순서대로)
+            pivot_row_idx = 0
+            for col in range(n_vars):
+                if pivot_row_idx >= n_rows:
+                    break
+                # 피벗 행 찾기
+                pr = None
+                for r in range(pivot_row_idx, n_rows):
+                    if matrix[r][col] != 0:
+                        pr = r
+                        break
+                if pr is None:
+                    continue
+                matrix[pivot_row_idx], matrix[pr] = matrix[pr], matrix[pivot_row_idx]
+                pv = matrix[pivot_row_idx][col]  # 피벗 값
+
+                # 다른 행에서 이 열 소거
+                for r in range(n_rows):
+                    if r == pivot_row_idx or matrix[r][col] == 0:
+                        continue
+                    factor = matrix[r][col]
+                    for j in range(n_vars + 1):
+                        matrix[r][j] = matrix[r][j] * pv - factor * matrix[pivot_row_idx][j]
+                    # GCD 정규화 (계수 폭발 방지)
+                    from math import gcd
+                    row_gcd = 0
+                    for j in range(n_vars + 1):
+                        row_gcd = gcd(row_gcd, abs(matrix[r][j]))
+                    if row_gcd > 1:
+                        for j in range(n_vars + 1):
+                            matrix[r][j] //= row_gcd
+                pivot_row_idx += 1
+
+            # 축소된 행렬에서 확정 셀 도출
+            for row in matrix:
+                coeffs = row[:n_vars]
+                rem_val = row[n_vars]
+                pos_cells = [cell_list[i] for i in range(n_vars) if coeffs[i] > 0]
+                neg_cells = [cell_list[i] for i in range(n_vars) if coeffs[i] < 0]
+                pos_sum   = sum(coeffs[i] for i in range(n_vars) if coeffs[i] > 0)
+                neg_sum   = sum(-coeffs[i] for i in range(n_vars) if coeffs[i] < 0)
+
+                if not pos_cells and not neg_cells:
+                    continue
+
+                # sum(pos*x) - sum(neg*x) = rem_val
+                # 최솟값: 0 - neg_sum = -neg_sum
+                # 최댓값: pos_sum - 0 = pos_sum
+
+                if len(pos_cells) + len(neg_cells) == 0:
+                    continue
+
+                # 모든 계수가 +1인 경우 (서브셋 추론 포함)
+                if not neg_cells and all(coeffs[cell_idx[c]] == 1 for c in pos_cells):
+                    if rem_val == 0:
+                        defi_safe.update(pos_cells); changed = True
+                    elif rem_val == len(pos_cells):
+                        defi_mine.update(pos_cells); changed = True
+
+                # 단일 변수: coeff * x = rem → x = rem / coeff
+                non_zero = [(i, coeffs[i]) for i in range(n_vars) if coeffs[i] != 0]
+                if len(non_zero) == 1:
+                    i, c = non_zero[0]
+                    if c != 0 and rem_val % c == 0:
+                        v = rem_val // c
+                        if v == 0:
+                            defi_safe.add(cell_list[i]); changed = True
+                        elif v == 1:
+                            defi_mine.add(cell_list[i]); changed = True
+
+                # ±1 혼합: 극단값 체크
+                # pos_cells 전부 1 + neg_cells 전부 0 → rem = pos_sum
+                # pos_cells 전부 0 + neg_cells 전부 1 → rem = -neg_sum
+                if pos_cells and neg_cells:
+                    if rem_val == pos_sum:
+                        # pos 전부 mine, neg 전부 safe
+                        defi_mine.update(pos_cells); changed = True
+                        defi_safe.update(neg_cells); changed = True
+                    elif rem_val == -neg_sum:
+                        # pos 전부 safe, neg 전부 mine
+                        defi_safe.update(pos_cells); changed = True
+                        defi_mine.update(neg_cells); changed = True
 
         # ── 3. 확정 셀 제외 후 frontier 재구성 ──────────
         frontier = set()
@@ -944,14 +1156,19 @@ class Minesweeper:
         groups = {}
         for cell in frontier:
             groups.setdefault(find(cell), []).append(cell)
-
         group_cst = {root: [] for root in groups}
         for rem, cl in cst_set:
             group_cst[find(next(iter(cl)))].append((rem, cl))
 
-        # ── 5. 각 그룹 백트래킹 열거 (노드 한도 보호) ───
-        def enumerate_group(cells, cst):
+        # ── 5. 그룹 백트래킹 열거 ─────────────────────────
+        def enumerate_group(cells, cst, randomize=False):
             n       = len(cells)
+            cst_cnt = {cell: 0 for cell in cells}
+            for _, cl in cst:
+                for c in cl:
+                    cst_cnt[c] += 1
+            cells = sorted(cells, key=lambda c: -cst_cnt[c])
+
             idx_map = {cell: i for i, cell in enumerate(cells)}
             cell_cst_idx = [[] for _ in range(n)]
             cst_list     = []
@@ -975,7 +1192,11 @@ class Minesweeper:
                 if pos == n:
                     results.append((tuple(assignment), mines))
                     return
-                for val in (0, 1):
+                vals = (0, 1)
+                if randomize:
+                    import random as _rng
+                    vals = (0, 1) if _rng.random() < 0.5 else (1, 0)
+                for val in vals:
                     ok = True
                     for ci in cell_cst_idx[pos]:
                         rem, cl = cst_list[ci]
@@ -993,7 +1214,9 @@ class Minesweeper:
                         assignment[pos] = 0
 
             bt(0, 0)
-            return results if not aborted[0] else None  # None = 중단됨
+            if not results:
+                return None
+            return (results, cells)  # (배치목록, 정렬된셀)
 
         # ── 6. 그룹별 계산 ───────────────────────────────
         group_data     = {}
@@ -1001,13 +1224,19 @@ class Minesweeper:
 
         for root, cells in groups.items():
             if len(cells) > MAX_GROUP_SIZE:
+                # 대그룹: 부분 열거 (randomize로 편향 감소)
+                result = enumerate_group(cells, group_cst[root], randomize=True)
+                if result is not None:
+                    group_data[root] = (result[1], result[0])
+                else:
+                    fallback_cells.update(cells)
+                continue
+            result = enumerate_group(cells, group_cst[root])
+            if result is None:
                 fallback_cells.update(cells)
                 continue
-            configs = enumerate_group(cells, group_cst[root])
-            if configs is None or not configs:
-                fallback_cells.update(cells)
-                continue
-            group_data[root] = (cells, configs)
+            sorted_cells, configs = result[1], result[0]
+            group_data[root] = (sorted_cells, configs)
 
         # ── 7. Convolution + C(nf,k) 가중치 ─────────────
         def convolve(d1, d2):
@@ -1027,19 +1256,15 @@ class Minesweeper:
             group_dists[root] = d
             total_dist = convolve(total_dist, d)
 
-        adj_nf = (total_closed - len(frontier) - len(defi_safe) - len(defi_mine)) + len(fallback_cells)
-        adj_nf = max(0, adj_nf)
+        adj_nf = max(0, (total_closed - len(frontier) - len(defi_safe) - len(defi_mine))
+                     + len(fallback_cells))
 
         total_weight = sum(
             cnt * safe_comb(adj_nf, total_remaining - len(defi_mine) - m)
             for m, cnt in total_dist.items()
         )
 
-        # ── 8. 셀별 확률 계산 ────────────────────────────
-        probs          = {}
-        enumerated_set = set()
-
-        # 확정 셀
+        probs = {}
         for cell in defi_safe:
             probs[cell] = 0.0
         for cell in defi_mine:
@@ -1047,7 +1272,6 @@ class Minesweeper:
 
         if total_weight > 0:
             for j_root, (j_cells, j_configs) in group_data.items():
-                enumerated_set.update(j_cells)
                 j_map = {cell: i for i, cell in enumerate(j_cells)}
                 other_dist = {0: 1}
                 for k_root, k_dist in group_dists.items():
@@ -1092,6 +1316,14 @@ class Minesweeper:
         fs       = max(9, CELL_SIZE // 5)       # 폰트 크기
         fs_small = max(7, CELL_SIZE // 7)       # 작은 폰트 (글로벌 확률용)
 
+        # 0% 셀이 없을 경우, 최저 확률 셀을 '추천 클릭' 셀로 표시
+        has_safe = any(round(p * 100) == 0 for p in probs.values())
+        best_cell = None
+        if not has_safe and probs:
+            min_p = min(probs.values())
+            if round(min_p * 100) < 100:  # 전부 100%가 아닐 때만
+                best_cell = min(probs, key=lambda k: probs[k])
+
         for (r, c), p in probs.items():
             x0, y0 = self._xy(r, c)
             cx = x0 + CELL_SIZE // 2
@@ -1099,7 +1331,12 @@ class Minesweeper:
 
             pct = round(p * 100)
 
-            if pct == 0:
+            if (r, c) == best_cell:
+                # ⭐ 추천 셀 — 가장 낮은 확률
+                text  = f"⭐{pct}%"
+                color = "#0088FF"   # 밝은 파랑
+                font  = ("Arial", fs, "bold")
+            elif pct == 0:
                 text  = "✓"
                 color = "#00CC00"   # 밝은 초록 — 안전
                 font  = ("Arial", fs, "bold")
