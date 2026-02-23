@@ -29,8 +29,8 @@ import os
 # ─────────────────────────────────────────────
 #  상수 정의
 # ─────────────────────────────────────────────
-CELL_SIZE  = 64    # 셀 한 변 픽셀 (32 → 64, 2배)
-INNER_PAD  = 16    # 패널-보드 사이 패딩
+CELL_SIZE  = 32    # 셀 한 변 픽셀 (50%로 축소)
+INNER_PAD  = 8     # 패널-보드 사이 패딩
 
 # 색상 팔레트 (클래식 Windows 지뢰찾기)
 BG_GRAY    = "#C0C0C0"
@@ -183,20 +183,20 @@ class Minesweeper:
         self.mine_lbl = tk.Label(
             panel, text=self._lcd(self.mine_count),
             bg=LCD_BG, fg=LCD_FG,
-            font=("Courier New", 48, "bold"),
+            font=("Courier New", 24, "bold"),
             width=3, relief="sunken", bd=2, padx=6
         )
         self.mine_lbl.pack(side="left", padx=(12, 0), pady=12)
 
-        # 얼굴 버튼 — 폰트는 28pt 고정, 패딩으로 버튼 크기 확보
+        # 얼굴 버튼
         self.face_btn = tk.Button(
             panel, text="\U0001f642",
-            font=("Segoe UI Emoji", 28),
+            font=("Segoe UI Emoji", 14),
             bg=BG_GRAY, activebackground=DARK_GRAY,
-            relief="raised", bd=3,
+            relief="raised", bd=2,
             command=self._new_game,
             cursor="hand2",
-            padx=16, pady=8
+            padx=12, pady=2
         )
         self.face_btn.pack(side="left", expand=True, pady=8)
 
@@ -204,7 +204,7 @@ class Minesweeper:
         self.timer_lbl = tk.Label(
             panel, text=self._lcd(0),
             bg=LCD_BG, fg=LCD_FG,
-            font=("Courier New", 48, "bold"),
+            font=("Courier New", 24, "bold"),
             width=3, relief="sunken", bd=2, padx=6
         )
         self.timer_lbl.pack(side="right", padx=(0, 12), pady=12)
@@ -212,44 +212,44 @@ class Minesweeper:
         # 💡 힌트 버튼 (타이머 왼쪽)
         self.hint_btn = tk.Button(
             panel, text="💡",
-            font=("Segoe UI Emoji", 22),
+            font=("Segoe UI Emoji", 10),
             bg=BG_GRAY, activebackground=DARK_GRAY,
-            relief="raised", bd=3,
+            relief="raised", bd=2,
             command=self._toggle_hint,
             cursor="hand2",
-            padx=10, pady=6
+            padx=6, pady=2
         )
         self.hint_btn.pack(side="right", pady=8, padx=(0, 4))
 
         # ✔ 안전 셀 자동 열기 버튼 (힌트 모드에서만 표시)
         self.auto_safe_btn = tk.Button(
             panel, text="✔️안전",
-            font=("맑은 고딕", 13, "bold"),
+            font=("맑은 고딕", 9, "bold"),
             bg="#C8F0C8", activebackground="#A0E0A0",
             relief="raised", bd=2,
             command=self._auto_open_safe,
             cursor="hand2",
-            padx=6, pady=4
+            padx=6, pady=2
         )
         # 🚩 지뢰 자동 깃발 버튼 (힌트 모드에서만 표시)
         self.auto_flag_btn = tk.Button(
             panel, text="🚩지뢰",
-            font=("맑은 고딕", 13, "bold"),
+            font=("맑은 고딕", 9, "bold"),
             bg="#F0C8C8", activebackground="#E0A0A0",
             relief="raised", bd=2,
             command=self._auto_flag_mines,
             cursor="hand2",
-            padx=6, pady=4
+            padx=6, pady=2
         )
         # 🎲 자동 플레이 버튼 (안전→깃발→반복→교착시 ⭐클릭)
         self.auto_play_btn = tk.Button(
             panel, text="🎲자동",
-            font=("맑은 고딕", 13, "bold"),
+            font=("맑은 고딕", 9, "bold"),
             bg="#C8D8F0", activebackground="#A0B8E0",
             relief="raised", bd=2,
             command=self._auto_play,
             cursor="hand2",
-            padx=6, pady=4
+            padx=6, pady=2
         )
         # 초기에는 숨김 (힌트 on 시 표시)
 
@@ -883,17 +883,36 @@ class Minesweeper:
             self.canvas.delete("hint")
 
     def _auto_open_safe(self):
-        """✔ 0% 확률 셀을 반복적으로 모두 자동 열기 (+ 100% 깃발도 동시)"""
+        """✔ 0% 확률 셀을 한 번만 모두 열기 (1단계)"""
         if self.game_over or self.game_won or self.first_click:
             return
-        self._auto_solve_loop()
+        probs = self._calc_probabilities()
+        progress = False
+        for (r, c), p in probs.items():
+            if round(p * 100) == 0 and self.cell_state[r][c] == STATE_CLOSED:
+                self._open_cell(r, c)
+                progress = True
+                if self.game_over:
+                    break
+        if progress:
+            self._check_win()
         self._update_hints_if_active()
 
     def _auto_flag_mines(self):
-        """🚩 100% 확률 셀을 반복적으로 모두 자동 깃발 (+ 0% 열기도 동시)"""
+        """🚩 100% 확률 셀을 한 번만 모두 깃발 (1단계)"""
         if self.game_over or self.game_won or self.first_click:
             return
-        self._auto_solve_loop()
+        probs = self._calc_probabilities()
+        progress = False
+        for (r, c), p in probs.items():
+            if round(p * 100) == 100 and self.cell_state[r][c] == STATE_CLOSED:
+                self.cell_state[r][c] = STATE_FLAG
+                self.flags_count += 1
+                self._draw_cell(r, c)
+                progress = True
+        if progress:
+            self.mine_lbl.config(text=self._lcd(self.mine_count - self.flags_count))
+            self._check_win()
         self._update_hints_if_active()
 
     def _auto_solve_loop(self):
